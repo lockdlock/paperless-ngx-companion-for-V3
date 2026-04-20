@@ -16,8 +16,8 @@ from PIL import Image
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 PAPERLESS_BASE_URL = os.getenv("PAPERLESS_BASE_URL", "").rstrip("/")
 PAPERLESS_API_TOKEN = os.getenv("PAPERLESS_API_TOKEN", "")
-PAPERLESS_LANG = os.getenv("PAPERLESS_LANG", "ch")
-REQUEST_TIMEOUT = 30
+PAPERLESS_LANG = os.getenv("PAPERLESS_LANG", "japan")
+REQUEST_TIMEOUT = 300
 MAX_TITLE_LENGTH = 80
 CONTENT_LOG_PREVIEW_CHARS = 200
 LLM_ENABLED = os.getenv("LLM_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
@@ -100,11 +100,13 @@ def _images_from_bytes(data: bytes, content_type: str) -> list[Image.Image]:
 def _ocr_image(img: Image.Image) -> list[str]:
     if not ocr_engine:
         raise RuntimeError("OCR engine not initialized")
-    result = ocr_engine.ocr(np.array(img), cls=True)
+    result = ocr_engine.predict(np.array(img))
     texts: list[str] = []
-    for line in result:
-        for _box, (txt, _score) in line:
-            cleaned = txt.strip()
+    for page in result:
+        rec_texts = page.get("rec_texts") or \
+                    page.get("res", {}).get("rec_texts", [])
+        for t in rec_texts:
+            cleaned = t.strip() if t else ""
             if cleaned:
                 texts.append(cleaned)
     return texts
@@ -256,7 +258,13 @@ async def _startup() -> None:
     client = httpx.AsyncClient(timeout=timeout)
     loop = asyncio.get_running_loop()
     ocr_engine = await loop.run_in_executor(
-        None, lambda: PaddleOCR(use_angle_cls=True, lang=PAPERLESS_LANG)
+        None,
+        lambda: PaddleOCR(
+            lang=PAPERLESS_LANG,
+            use_textline_orientation=True,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+        ),
     )
     logger.info("OCR engine initialized, lang=%s", PAPERLESS_LANG)
 
