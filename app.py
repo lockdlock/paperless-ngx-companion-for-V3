@@ -16,7 +16,9 @@ from PIL import Image
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 PAPERLESS_BASE_URL = os.getenv("PAPERLESS_BASE_URL", "").rstrip("/")
 PAPERLESS_API_TOKEN = os.getenv("PAPERLESS_API_TOKEN", "")
-PAPERLESS_LANG = os.getenv("PAPERLESS_LANG", "japan")
+# 未設定または空文字の場合はPP-OCRv5デフォルト（日本語含む多言語対応）を使用
+# 旧モデルを使いたい場合は .env で PAPERLESS_LANG=japan と指定する
+PAPERLESS_LANG = os.getenv("PAPERLESS_LANG", "").strip()
 REQUEST_TIMEOUT = 300
 MAX_TITLE_LENGTH = 80
 CONTENT_LOG_PREVIEW_CHARS = 200
@@ -103,8 +105,13 @@ def _ocr_image(img: Image.Image) -> list[str]:
     result = ocr_engine.predict(np.array(img))
     texts: list[str] = []
     for page in result:
-        rec_texts = page.get("rec_texts") or \
-                    page.get("res", {}).get("rec_texts", [])
+        if hasattr(page, "rec_texts"):
+            rec_texts = page.rec_texts
+        elif isinstance(page, dict):
+            rec_texts = page.get("rec_texts") or \
+                        page.get("res", {}).get("rec_texts", [])
+        else:
+            rec_texts = []
         for t in rec_texts:
             cleaned = t.strip() if t else ""
             if cleaned:
@@ -234,6 +241,7 @@ async def _format_content_with_llm(content: str) -> str | None:
         logger.warning("LLM formatting error: %s", exc)
     return None
 
+
 async def _update_document(doc_id: int, content: str, title: str | None) -> None:
     if not client:
         raise HTTPException(status_code=503, detail="HTTP client not ready")
@@ -257,16 +265,30 @@ async def _startup() -> None:
     timeout = httpx.Timeout(REQUEST_TIMEOUT)
     client = httpx.AsyncClient(timeout=timeout)
     loop = asyncio.get_running_loop()
-    ocr_engine = await loop.run_in_executor(
-        None,
-        lambda: PaddleOCR(
-            lang=PAPERLESS_LANG,
-            use_textline_orientation=True,
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-        ),
-    )
-    logger.info("OCR engine initialized, lang=%s", PAPERLESS_LANG)
+
+    if PAPERLESS_LANG:
+        # PAPERLESS_LANG指定あり → 旧モデル（japan等）を使用
+        ocr_engine = await loop.run_in_executor(
+            None,
+            lambda: PaddleOCR(
+                lang=PAPERLESS_LANG,
+                use_textline_orientation=True,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+            ),
+        )
+        logger.info("OCR engine initialized with legacy model, lang=%s", PAPERLESS_LANG)
+    else:
+        # PAPERLESS_LANG未指定 → PP-OCRv5デフォルト（多言語統合モデル）を使用
+        ocr_engine = await loop.run_in_executor(
+            None,
+            lambda: PaddleOCR(
+                use_textline_orientation=True,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+            ),
+        )
+        logger.info("OCR engine initialized with PP-OCRv5 default (multilingual)")
 
 
 @app.on_event("shutdown")
