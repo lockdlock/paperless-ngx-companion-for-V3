@@ -19,6 +19,10 @@ RUN useradd -m appuser
 WORKDIR /app
 
 COPY requirements.txt .
+
+RUN pip install paddlepaddle-gpu==3.3.0 \
+    -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
